@@ -3,6 +3,7 @@ import json
 from time import sleep
 from os import system
 from collections import Counter
+import re
 
 CARPETA_ARCHIVOS = os.path.join(os.path.expanduser("~"), "ZipplyZ")
 
@@ -145,7 +146,6 @@ def menu():
             print("• Se permiten letras, números, espacios y signos de puntuación.")
             print("• Caracteres especiales como acentos y ñ están permitidos.")
             print("• El nombre del archivo debe ser válido (sin \\ / : * ? \" < > |).\n")
-
             texto = input("Ingresar texto a comprimir:\n\n> ").strip()
             if not texto:
                 print("¡Error! El texto no puede estar vacío.")
@@ -154,20 +154,32 @@ def menu():
 
             codificado, codigos = compresor.codificar(texto)
             animacion_progreso("Comprimiendo")
-            nombre = input("Nombre del archivo a guardar (sin extensión): ").strip()
-            if not all(c.isalnum() or c in (' ', '_') for c in nombre):
-                print("¡Error! El nombre contiene caracteres no válidos.")
-                input("Presiona Enter para continuar...")
-                continue
+            while True:
+                nombre = input("Nombre del archivo a guardar (sin extensión): ").strip()
+                if not nombre or re.search(r'[\\/:*?"<>|]', nombre):
+                    print("¡Error! El nombre contiene caracteres no válidos (\\ / : * ? \" < > |). Intenta nuevamente.\n")
+                else:
+                    break
 
-            ruta = os.path.join(CARPETA_ARCHIVOS, f"{nombre}.txt")
-            with open(ruta, "w", encoding="utf-8") as f:
-                json.dump({"codificado": codificado, "codigos": codigos}, f, ensure_ascii=False)
+            # Generar bytes reales
+            if len(codificado) % 8 != 0:
+                codificado += '0' * (8 - len(codificado) % 8)
+            bytes_comprimidos = bytearray()
+            for i in range(0, len(codificado), 8):
+                bytes_comprimidos.append(int(codificado[i:i+8], 2))
 
-            print(f"\n✔ Texto comprimido y guardado como '{ruta}'")
+            ruta_bin = os.path.join(CARPETA_ARCHIVOS, f"{nombre}.bin")
+            with open(ruta_bin, "wb") as f:
+                f.write(bytes_comprimidos)
+
+            ruta_codigos = os.path.join(CARPETA_ARCHIVOS, f"{nombre}_codigos.json")
+            with open(ruta_codigos, "w", encoding="utf-8") as f:
+                json.dump(codigos, f, ensure_ascii=False)
+
+            print(f"\n✔ Texto comprimido y guardado como '{ruta_bin}'")
 
             tamanio_original = len(texto.encode('utf-8'))
-            tamanio_comprimido = len(codificado) // 8
+            tamanio_comprimido = os.path.getsize(ruta_bin)
             print(f"✔ Tamaño original: {tamanio_original} bytes")
             print(f"✔ Tamaño comprimido: {tamanio_comprimido} bytes")
             input("Presiona Enter para continuar...")
@@ -176,10 +188,10 @@ def menu():
             limpiar_pantalla()
             print("\n[ DESCOMPRESIÓN DE ARCHIVO ]")
             print("────────────────────────────────────────")
-            print("• Solo se muestran archivos válidos previamente guardados.")
             print("• El archivo debe contener un texto comprimido con este sistema.\n")
+            print("• Solo se muestran archivos válidos previamente guardados.\n")
 
-            archivos = [f for f in os.listdir(CARPETA_ARCHIVOS) if f.endswith(".txt")]
+            archivos = [f for f in os.listdir(CARPETA_ARCHIVOS) if f.endswith(".bin")]
             if not archivos:
                 print("⚠ No hay archivos para descomprimir.")
                 input("Presiona Enter para continuar...")
@@ -191,29 +203,44 @@ def menu():
 
             try:
                 idx = int(input("Selecciona el número del archivo: ")) - 1
-                ruta = os.path.join(CARPETA_ARCHIVOS, archivos[idx])
+                archivo_bin = archivos[idx]
+                nombre_base = archivo_bin.replace(".bin", "")
+                ruta_bin = os.path.join(CARPETA_ARCHIVOS, archivo_bin)
+                ruta_codigos = os.path.join(CARPETA_ARCHIVOS, f"{nombre_base}_codigos.json")
 
-                with open(ruta, "r", encoding="utf-8") as f:
-                    datos = json.load(f)
+                # Leer binario y convertir a bits
+                with open(ruta_bin, "rb") as f:
+                    bytes_data = f.read()
+                    bits = ''.join(f"{byte:08b}" for byte in bytes_data)
 
-                texto_decodificado = compresor.decodificar(datos["codificado"], datos["codigos"])
+                # Leer el diccionario de codificación
+                with open(ruta_codigos, "r", encoding="utf-8") as f:
+                    codigos = json.load(f)
+
+                texto_decodificado = compresor.decodificar(bits, codigos)
                 animacion_progreso("Descomprimiendo")
                 print("\nTexto descomprimido:")
                 print(texto_decodificado)
                 input("Presiona Enter para continuar...")
-            except (IndexError, ValueError):
-                print("¡Error! Opción inválida.")
+            except (IndexError, ValueError, FileNotFoundError):
+                print("¡Error! Opción inválida o archivo faltante.")
                 input("Presiona Enter para continuar...")
 
         elif opcion == "3":
             limpiar_pantalla()
             print("\n[ VER ARCHIVOS GUARDADOS ]")
             print("────────────────────────────────────────")
-            archivos = [f for f in os.listdir(CARPETA_ARCHIVOS) if f.endswith(".txt")]
-            if not archivos:
+            archivos_bin = [f for f in os.listdir(CARPETA_ARCHIVOS) if f.endswith(".bin")]
+            archivos_codigos = [f for f in os.listdir(CARPETA_ARCHIVOS) if f.endswith("_codigos.json")]
+
+            if not archivos_bin:
                 print("⚠ No hay archivos guardados.")
             else:
-                for nombre in archivos:
+                print("Archivos comprimidos:")
+                for nombre in archivos_bin:
+                    print(f"- {nombre}")
+                print("\nDiccionarios Huffman:")
+                for nombre in archivos_codigos:
                     print(f"- {nombre}")
             input("Presiona Enter para continuar...")
 
@@ -221,23 +248,31 @@ def menu():
             limpiar_pantalla()
             print("\n[ ELIMINAR ARCHIVOS ]")
             print("────────────────────────────────────────")
-            print("• Elimina de forma permanente un archivo comprimido.\n")
+            print("• Elimina de forma permanente un archivo comprimido y su diccionario.\n")
 
-            archivos = [f for f in os.listdir(CARPETA_ARCHIVOS) if f.endswith(".txt")]
-            if not archivos:
+            archivos_bin = [f for f in os.listdir(CARPETA_ARCHIVOS) if f.endswith(".bin")]
+            if not archivos_bin:
                 print("⚠ No hay archivos para eliminar.")
                 input("Presiona Enter para continuar...")
                 continue
+
             print("Archivos disponibles:")
-            for i, nombre in enumerate(archivos):
+            for i, nombre in enumerate(archivos_bin):
                 print(f"[ {i + 1} ] {nombre}")
 
             try:
                 idx = int(input("Selecciona el número del archivo a eliminar: ")) - 1
-                ruta = os.path.join(CARPETA_ARCHIVOS, archivos[idx])
-                os.remove(ruta)
+                archivo_bin = archivos_bin[idx]
+                nombre_base = archivo_bin.replace(".bin", "")
+                ruta_bin = os.path.join(CARPETA_ARCHIVOS, archivo_bin)
+                ruta_codigos = os.path.join(CARPETA_ARCHIVOS, f"{nombre_base}_codigos.json")
+
+                os.remove(ruta_bin)
+                if os.path.exists(ruta_codigos):
+                    os.remove(ruta_codigos)
+
                 animacion_progreso("Eliminando")
-                print(f"\n✔ Archivo '{archivos[idx]}' eliminado.")
+                print(f"\n✔ Archivos '{archivo_bin}' y su diccionario asociados eliminados.")
                 input("Presiona Enter para continuar...")
             except (IndexError, ValueError):
                 print("¡Error! Opción inválida.")
@@ -254,7 +289,6 @@ def menu():
         else:
             print("¡Opción inválida!")
             input("Presiona Enter para continuar...")
-
-
+ 
 if __name__ == "__main__":
     menu()
